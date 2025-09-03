@@ -49,11 +49,15 @@ async fn start_recording(
 
     // Use app data directory as out_dir to avoid permission issues when app is installed
     let data_dir = app_handle
-        .path_resolver()
+        .path()
         .app_data_dir()
-        .ok_or("failed to resolve app data dir".to_string())?;
+        .unwrap();
+        //.ok_or("failed to resolve app data dir".to_string())?;
+   
+    
     cfg.out_dir = data_dir.join("recordings");
     cfg.format = Container::Wav; // or accept a parameter from frontend
+    
 
     // ensure it exists
     std::fs::create_dir_all(&cfg.out_dir).map_err(|e| e.to_string())?;
@@ -124,15 +128,22 @@ async fn start_recording(
 async fn stop_recording(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
     // Read pidfile from app_data
     let data_dir = app_handle
-        .path_resolver()
+        .path()
         .app_data_dir()
-        .ok_or("failed to resolve app data dir")?;
+        .unwrap();
+        //.ok_or("failed to resolve app data dir")?;
     let pidfile = data_dir.join("audiocap.pid");
     if !pidfile.exists() {
         return Err("pidfile not found".into());
     }
     let pid_str = std::fs::read_to_string(&pidfile).map_err(|e| e.to_string())?;
-    let pid: u32 = pid_str.trim().parse().map_err(|e| e.to_string())?;
+    
+    let pid: u32 = pid_str
+    .trim()
+    .parse::<u32>()
+    .map_err(|e: std::num::ParseIntError| e.to_string())?;
+
+
     let ok = stop_pid(pid).map_err(|e| e.to_string())?;
     if ok {
         let _ = std::fs::remove_file(&pidfile);
@@ -148,15 +159,21 @@ async fn stop_recording(app_handle: tauri::AppHandle) -> Result<serde_json::Valu
 #[tauri::command]
 async fn status(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let data_dir = app_handle
-        .path_resolver()
+        .path()
         .app_data_dir()
-        .ok_or("failed to resolve app data dir")?;
+        .unwrap();
+        //.ok_or("failed to resolve app data dir")?;
     let pidfile = data_dir.join("audiocap.pid");
     if !pidfile.exists() {
         return Ok(serde_json::json!({ "status": "no_pidfile" }));
     }
     let pid_str = std::fs::read_to_string(&pidfile).map_err(|e| e.to_string())?;
-    let pid: u32 = pid_str.trim().parse().map_err(|e| e.to_string())?;
+    let pid: u32 = pid_str
+    .trim()
+    .parse::<u32>()
+    .map_err(|e: std::num::ParseIntError| e.to_string())?;
+
+
     let alive = is_pid_alive(pid).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "status": if alive { "running" } else { "not_running" }, "pid": pid }))
 }
@@ -174,29 +191,9 @@ async fn list_audio_devices() -> Result<String, String> {
 
 fn add_resource_dir_to_path(app_handle: &tauri::AppHandle) -> anyhow::Result<()> {
     // If you bundle ffmpeg in resource dir, add that dir to PATH so `ffmpeg` resolves.
-    if let Some(res_dir) = app_handle.path_resolver().resource_dir() {
-        // resource_dir()/binaries should contain ffmpeg executable(s)
-        let bin_dir = res_dir.join("binaries");
-        if bin_dir.exists() {
-            // set executable perms on unix
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let ff = bin_dir.join("ffmpeg");
-                if ff.exists() {
-                    let mut perms = std::fs::metadata(&ff)?.permissions();
-                    perms.set_mode(0o755);
-                    std::fs::set_permissions(ff, perms)?;
-                }
-            }
-            // prepend to PATH (platform-specific separator)
-            let path_key = "PATH";
-            let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
-            let cur = std::env::var(path_key).unwrap_or_default();
-            let new = format!("{}{}{}", bin_dir.display(), sep, cur);
-            std::env::set_var(path_key, new);
-        }
-    }
+    let res_dir = app_handle.path().resource_dir();
+    println!("Resources dir: {:?}", res_dir);
+ 
     Ok(())
 }
 
