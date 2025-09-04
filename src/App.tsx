@@ -11,21 +11,44 @@ type Recording = {
 };
 
 // Simple in-memory store for recordings
-const RecordingStore = {
-  items: [] as Recording[],
-  add(rec: { file: string }) {
-    const newRec: Recording = {
-      id: String(Date.now()),
-      file: rec.file,
-      startedAt: new Date().toISOString(),
-      status: "done",
-    };
-    this.items.push(newRec);
-  },
-  all() {
-    return this.items;
-  },
-};
+// Replace existing RecordingStore with this improved version
+const RecordingStore = (() => {
+  let items: Recording[] = [];
+  const subs: Array<() => void> = [];
+
+  return {
+    add: (rec: { file?: string; status?: Recording["status"] }) => {
+      const newRec: Recording = {
+        id: String(Date.now()),
+        file: rec.file || `recording_${new Date().toISOString()}`,
+        startedAt: new Date().toISOString(),
+        status: rec.status || "recording",
+      };
+      // push to front
+      items.unshift(newRec);
+      subs.forEach((s) => s());
+      return newRec;
+    },
+    markDone: (id: string, filePath?: string) => {
+      const found = items.find((r) => r.id === id);
+      if (found) {
+        found.status = "done";
+        if (filePath) found.file = filePath;
+        subs.forEach((s) => s());
+      }
+    },
+    all: () => items.slice(),
+    subscribe: (cb: () => void) => {
+      subs.push(cb);
+      return () => {
+        const i = subs.indexOf(cb);
+        if (i >= 0) subs.splice(i, 1);
+      };
+    },
+    latest: () => (items.length ? items[0] : undefined),
+  };
+})();
+
 
 function DevicePanel() {
   const [output, setOutput] = useState("");
@@ -118,7 +141,7 @@ function SettingsPanel() {
     </section>
   );
 }
-
+// Replace existing RecorderPanel with this version
 function RecorderPanel() {
   const [recording, setRecording] = useState(false);
   const [background, setBackground] = useState(true);
@@ -126,6 +149,15 @@ function RecorderPanel() {
   const [lastResult, setLastResult] = useState<any>(null);
   const [isWorking, setIsWorking] = useState(false);
   const [outputPath, setOutputPath] = useState<string | null>(null);
+  const [currentRecId, setCurrentRecId] = useState<string | null>(null);
+
+  // keep recordings list up to date (optional)
+  useEffect(() => {
+    const unsub = RecordingStore.subscribe(() => {
+      /* noop: components that read the store will re-render via their own subscription */
+    });
+    return unsub;
+  }, []);
 
   useEffect(() => {
     let t: any;
@@ -145,8 +177,15 @@ function RecorderPanel() {
   }
 
   async function start() {
+    // optimistic UI: mark recording true immediately so user sees Stop button
     setIsWorking(true);
     setLastResult(null);
+    setRecording(true);
+
+    // create a local entry in the RecordingStore with "recording" status
+    const rec = RecordingStore.add({ status: "recording", file: outputPath || undefined });
+    setCurrentRecId(rec.id);
+
     try {
       const res: any = await invoke("start_recording", {
         output: outputPath || null,
@@ -155,23 +194,56 @@ function RecorderPanel() {
         mic: null,
         system: null,
       });
+
       setLastResult(res);
-      if (res?.status === "started" || res?.status === "running") {
-        setRecording(true);
+
+      // If backend returns a file path (background start), update the record
+      if (res?.file && currentRecId) {
+        RecordingStore.markDone(currentRecId, String(res.file));
+        setCurrentRecId(null);
+        // if backend said it started in background, keep `recording` true until stopped
+        if (res?.status === "done") {
+          setRecording(false);
+        } else {
+          setRecording(true);
+        }
       }
-      if (res?.file) RecordingStore.add({ file: String(res.file) });
     } catch (e: any) {
+      // on error, rollback optimistic state
       alert(String(e));
+      setRecording(false);
+      if (currentRecId) {
+        RecordingStore.markDone(currentRecId); // mark as done without a file
+        setCurrentRecId(null);
+      }
     } finally {
       setIsWorking(false);
     }
   }
 
   async function stop() {
+    if (!recording) {
+      // nothing to do
+      return;
+    }
+
     setIsWorking(true);
     try {
       const res: any = await invoke("stop_recording");
       setLastResult(res);
+
+      // mark current recording done in the store
+      if (currentRecId) {
+        // if backend returns file path include it
+        const filePath = res?.file ? String(res.file) : undefined;
+        RecordingStore.markDone(currentRecId, filePath);
+      } else {
+        // if we didn't have an ID, try to mark the latest
+        const latest = RecordingStore.latest();
+        if (latest) RecordingStore.markDone(latest.id, res?.file ? String(res.file) : undefined);
+      }
+
+      setCurrentRecId(null);
       setRecording(false);
     } catch (e: any) {
       alert(String(e));
@@ -185,47 +257,48 @@ function RecorderPanel() {
       <h2 className="font-semibold text-lg">Recorder</h2>
 
       <div className="mt-4 flex flex-col gap-3">
-        
         <div className="flex flex-wrap items-center gap-3">
-  {/* Start button */}
-  <button
-    className={`px-5 py-2 rounded-lg text-white font-medium transition ${
-      isWorking || recording
-        ? "bg-gray-400 cursor-not-allowed"
-        : "bg-green-600 hover:bg-green-700"
-    }`}
-    onClick={start}
-    disabled={isWorking || recording}
-  >
-    🎙 Start
-  </button>
+          {/* Start button (disabled while working OR already recording) */}
+          <button
+            className={`px-5 py-2 rounded-lg text-white font-medium transition ${
+              isWorking || recording ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
+            }`}
+            onClick={start}
+            disabled={isWorking || recording}
+            aria-pressed={recording}
+            title={recording ? "Recording in progress" : "Start recording"}
+          >
+            🎙 Start
+          </button>
 
-  {/* Small Stop button (always visible when recording) */}
-  {recording && (
-    <button
-      className={`px-3 py-1 rounded-md text-white text-sm font-medium transition ${
-        isWorking
-          ? "bg-gray-400 cursor-not-allowed"
-          : "bg-red-600 hover:bg-red-700"
-      }`}
-      onClick={stop}
-      disabled={isWorking}
-    >
-      ⏹ Stop
-    </button>
-  )}
+          {/* Stop button: always visible, enabled only when recording */}
+          <button
+            className={`px-3 py-1 rounded-md text-white text-sm font-medium transition ${
+              isWorking || !recording ? "bg-gray-300 cursor-not-allowed" : "bg-red-600 hover:bg-red-700"
+            }`}
+            onClick={stop}
+            disabled={isWorking || !recording}
+            title={!recording ? "No active recording" : "Stop recording"}
+          >
+            ⏹ Stop
+          </button>
 
-  <label className="flex items-center gap-2 text-sm">
-    <input
-      type="checkbox"
-      checked={background}
-      onChange={(e) => setBackground(e.target.checked)}
-      className="w-4 h-4"
-    />
-    <span>Background</span>
-  </label>
-</div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={background}
+              onChange={(e) => setBackground(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span>Background</span>
+          </label>
 
+          {/* small status indicator */}
+          <div className="ml-2 flex items-center gap-2 text-sm">
+            <span className={`inline-block w-2 h-2 rounded-full ${recording ? "bg-red-500" : "bg-gray-300"}`} />
+            <span className="text-xs text-gray-600">{recording ? "Recording" : "Idle"}</span>
+          </div>
+        </div>
 
         <input
           type="text"
@@ -247,9 +320,7 @@ function RecorderPanel() {
       <div className="mt-3 text-xs text-gray-600 break-words">
         <div>
           Last result:{" "}
-          <code className="bg-gray-100 px-1 rounded">
-            {lastResult ? JSON.stringify(lastResult) : "—"}
-          </code>
+          <code className="bg-gray-100 px-1 rounded">{lastResult ? JSON.stringify(lastResult) : "—"}</code>
         </div>
       </div>
     </section>
@@ -303,7 +374,7 @@ function Header() {
 
 export default function App() {
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 p-4 sm:p-6 font-sans">
+    <div className="2xl:scale-125 2xl:pt-32 bg-gradient-to-b from-gray-50 to-gray-100 p-4 sm:p-6 font-sans">
       <div className="max-w-6xl mx-auto bg-white rounded-2xl shadow-lg p-4 sm:p-8">
         <Header />
         <main className="mt-6 grid gap-6 md:grid-cols-2">
@@ -320,6 +391,7 @@ export default function App() {
             <SummaryPanel />
           </div>
         </main>
+          <div className="pt-8 text-blue-500">* Note : the recordings are saved at .local/share/the-library/recordings. I am dumb and do not know if your lib name would be the same as mine, it should be, and it should be com.ryaaha.pandora-reutil</div>
       </div>
     </div>
   );
