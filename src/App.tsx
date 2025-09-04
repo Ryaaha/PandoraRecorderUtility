@@ -1,9 +1,5 @@
 // src/App.tsx
-// React + Tauri UI for audiocap recorder library
-// Drop this file into your React app (e.g. src/App.tsx).
-// Requires @tauri-apps/api installed.
-
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 type Recording = {
@@ -14,61 +10,134 @@ type Recording = {
   status: "recording" | "done";
 };
 
-export default function App() {
-  return (
-    <div className="min-h-screen bg-gray-50 p-6 font-sans">
-      <div className="max-w-4xl mx-auto bg-white rounded-lg shadow p-6">
-        <Header />
-        <main className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <RecorderPanel />
-            <DevicePanel />
-            <SettingsPanel />
-          </div>
+// Simple in-memory store for recordings
+const RecordingStore = {
+  items: [] as Recording[],
+  add(rec: { file: string }) {
+    const newRec: Recording = {
+      id: String(Date.now()),
+      file: rec.file,
+      startedAt: new Date().toISOString(),
+      status: "done",
+    };
+    this.items.push(newRec);
+  },
+  all() {
+    return this.items;
+  },
+};
 
-          <div>
-            <RecordingsList />
-            <SummaryPanel />
-          </div>
-        </main>
+function DevicePanel() {
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function showDevices() {
+    setLoading(true);
+    try {
+      const res: any = await invoke("list_audio_devices");
+      setOutput(JSON.stringify(res, null, 2));
+      alert("Device list command executed. Check logs for details.");
+    } catch (e: any) {
+      setOutput(String(e));
+      alert(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border bg-white p-4 shadow-sm">
+      <h3 className="font-medium text-lg">Devices</h3>
+      <div className="mt-3 flex flex-col gap-3">
+        <button
+          onClick={showDevices}
+          disabled={loading}
+          className={`px-4 py-2 rounded-lg text-white font-medium transition ${
+            loading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"
+          }`}
+        >
+          {loading ? "Loading..." : "Show Devices"}
+        </button>
+        <pre className="text-xs text-gray-600 whitespace-pre-wrap break-words bg-gray-50 p-2 rounded">
+          {output || "No devices listed yet."}
+        </pre>
       </div>
-    </div>
+    </section>
   );
 }
 
-function Header() {
+function SummaryPanel() {
+  const [text] = useState<string | null>(null);
+
   return (
-    <header className="flex items-center justify-between">
-      <div>
-        <h1 className="text-2xl font-bold">AudioCap — Recorder</h1>
-        <p className="text-sm text-gray-600">Start/stop recordings, save files, and summarize meetings.</p>
+    <section className="rounded-xl border bg-white p-4 shadow-sm">
+      <h3 className="font-medium text-lg">Summary</h3>
+      <div className="mt-3 text-sm text-gray-700">
+        {text ? (
+          <div className="whitespace-pre-wrap">{text}</div>
+        ) : (
+          <div className="text-gray-400">
+            Click "Summarize" on a recording to see the summary here.
+          </div>
+        )}
       </div>
-      <div className="text-right text-sm text-gray-500">v0.1</div>
-    </header>
+    </section>
+  );
+}
+
+function SettingsPanel() {
+  const [format, setFormat] = useState("wav");
+  const [wasapi, setWasapi] = useState(false);
+
+  return (
+    <section className="rounded-xl border bg-white p-4 shadow-sm">
+      <h3 className="font-medium text-lg">Settings</h3>
+      <div className="mt-3 grid grid-cols-2 gap-4">
+        <label className="text-sm flex items-center gap-2">
+          Format
+          <select
+            value={format}
+            onChange={(e) => setFormat(e.target.value)}
+            className="rounded-lg border px-2 py-1 text-sm focus:ring focus:ring-blue-200"
+          >
+            <option value="wav">WAV</option>
+            <option value="mp3">MP3</option>
+          </select>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={wasapi}
+            onChange={(e) => setWasapi(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          Use WASAPI (Windows)
+        </label>
+      </div>
+    </section>
   );
 }
 
 function RecorderPanel() {
-  const [recording, setRecording] = useState<boolean>(false);
-  const [background, setBackground] = useState<boolean>(true);
-  const [duration, setDuration] = useState<string>("");
+  const [recording, setRecording] = useState(false);
+  const [background, setBackground] = useState(true);
+  const [duration, setDuration] = useState("");
   const [lastResult, setLastResult] = useState<any>(null);
   const [isWorking, setIsWorking] = useState(false);
   const [outputPath, setOutputPath] = useState<string | null>(null);
 
   useEffect(() => {
-    // optional: poll status every 3s to keep UI in sync
     let t: any;
     if (recording) {
-      t = setInterval(() => checkStatus().then((s) => console.debug("status poll", s)), 3000);
+      t = setInterval(() => checkStatus().then(console.debug), 3000);
     }
     return () => clearInterval(t);
   }, [recording]);
 
   async function checkStatus() {
     try {
-      const res = await invoke("status");
-      return res;
+      return await invoke("status");
     } catch (e) {
       console.warn("status check failed", e);
       return null;
@@ -79,31 +148,20 @@ function RecorderPanel() {
     setIsWorking(true);
     setLastResult(null);
     try {
-      const payload = {
+      const res: any = await invoke("start_recording", {
         output: outputPath || null,
         background,
         duration: duration || null,
         mic: null,
         system: null,
-      };
-
-      const res: any = await invoke("start_recording", payload as any);
+      });
       setLastResult(res);
-      if (res && res.status === "started") {
+      if (res?.status === "started" || res?.status === "running") {
         setRecording(true);
-      } else if (res && res.status === "running") {
-        setRecording(true);
-      } else if (res && res.status === "done") {
-        setRecording(false);
       }
-
-      // If backend returned file path, add to session store
-      if (res && res.file) {
-        RecordingStore.add({ file: String(res.file) });
-      }
+      if (res?.file) RecordingStore.add({ file: String(res.file) });
     } catch (e: any) {
       alert(String(e));
-      console.error(e);
     } finally {
       setIsWorking(false);
     }
@@ -117,46 +175,56 @@ function RecorderPanel() {
       setRecording(false);
     } catch (e: any) {
       alert(String(e));
-      console.error(e);
     } finally {
       setIsWorking(false);
     }
   }
 
   return (
-    <section className="border rounded p-4 mb-4">
-      <h2 className="font-semibold">Recorder</h2>
+    <section className="border rounded-xl p-4 sm:p-6 bg-gray-50 shadow-sm">
+      <h2 className="font-semibold text-lg">Recorder</h2>
 
-      <div className="mt-3 flex items-center gap-3">
-        {!recording ? (
-          <button
-            className={`px-4 py-2 rounded text-white ${isWorking ? "bg-gray-400" : "bg-green-600"}`}
-            onClick={start}
-            disabled={isWorking}
-          >
-            🎙 Start
-          </button>
-        ) : (
-          <button
-            className={`px-4 py-2 rounded text-white ${isWorking ? "bg-gray-400" : "bg-red-600"}`}
-            onClick={stop}
-            disabled={isWorking}
-          >
-            ⏹ Stop
-          </button>
-        )}
+      <div className="mt-4 flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {!recording ? (
+            <button
+              className={`px-5 py-2 rounded-lg text-white font-medium transition ${
+                isWorking ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"
+              }`}
+              onClick={start}
+              disabled={isWorking}
+            >
+              🎙 Start
+            </button>
+          ) : (
+            <button
+              className={`px-5 py-2 rounded-lg text-white font-medium transition ${
+                isWorking ? "bg-gray-400" : "bg-red-600 hover:bg-red-700"
+              }`}
+              onClick={stop}
+              disabled={isWorking}
+            >
+              ⏹ Stop
+            </button>
+          )}
 
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={background} onChange={(e) => setBackground(e.target.checked)} />
-          <span className="text-sm text-gray-700">Background</span>
-        </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={background}
+              onChange={(e) => setBackground(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span>Background</span>
+          </label>
+        </div>
 
         <input
           type="text"
           placeholder="Duration (e.g. 00:10:00)"
           value={duration}
           onChange={(e) => setDuration(e.target.value)}
-          className="px-2 py-1 border rounded text-sm"
+          className="px-3 py-2 border rounded-lg text-sm w-full"
         />
 
         <input
@@ -164,171 +232,87 @@ function RecorderPanel() {
           placeholder="Optional output path (leave empty for auto)"
           value={outputPath || ""}
           onChange={(e) => setOutputPath(e.target.value || null)}
-          className="px-2 py-1 border rounded text-sm flex-1"
+          className="px-3 py-2 border rounded-lg text-sm w-full"
         />
       </div>
 
-      <div className="mt-3 text-xs text-gray-600">
-        <div>Last result: <code>{lastResult ? JSON.stringify(lastResult) : "—"}</code></div>
+      <div className="mt-3 text-xs text-gray-600 break-words">
+        <div>
+          Last result:{" "}
+          <code className="bg-gray-100 px-1 rounded">
+            {lastResult ? JSON.stringify(lastResult) : "—"}
+          </code>
+        </div>
       </div>
     </section>
   );
 }
-
-function DevicePanel() {
-  const [output, setOutput] = useState<string>("");
-  const [loading, setLoading] = useState(false);
-
-  async function showDevices() {
-    setLoading(true);
-    try {
-      // list_audio_devices prints to stdout/stderr. We call it so the OS logs will contain results.
-      // Backend returns a small "done" string by default.
-      const res: any = await invoke("list_audio_devices");
-      setOutput(String(res));
-      alert("Device list command executed. Check your terminal/console output for ffmpeg device list.");
-    } catch (e: any) {
-      setOutput(String(e));
-      alert(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <section className="border rounded p-4 mb-4">
-      <h3 className="font-medium">Devices</h3>
-      <p className="text-sm text-gray-600">If you need to discover device names (for advanced users), press "Show devices" and inspect console logs.</p>
-      <div className="mt-3 flex gap-2">
-        <button className="px-3 py-2 bg-blue-600 text-white rounded" onClick={showDevices} disabled={loading}>
-          {loading ? "Listing…" : "Show devices"}
-        </button>
-      </div>
-      <pre className="mt-3 text-xs bg-gray-100 p-2 rounded h-24 overflow-auto">{output}</pre>
-    </section>
-  );
-}
-
-function SettingsPanel() {
-  // This component stores user preferences locally (could be wired to Tauri settings/API)
-  const [format, setFormat] = useState<string>("wav");
-  const [wasapi, setWasapi] = useState<boolean>(false);
-
-  return (
-    <section className="border rounded p-4">
-      <h3 className="font-medium">Settings</h3>
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <label className="text-sm">
-          Format
-          <select value={format} onChange={(e) => setFormat(e.target.value)} className="ml-2 border rounded px-2 py-1 text-sm">
-            <option value="wav">WAV</option>
-            <option value="mp3">MP3</option>
-          </select>
-        </label>
-
-        <label className="text-sm">
-          <input type="checkbox" checked={wasapi} onChange={(e) => setWasapi(e.target.checked)} />
-          <span className="ml-2">Use WASAPI (Windows)</span>
-        </label>
-      </div>
-    </section>
-  );
-}
-
-/*
-  RecordingsList: very small in-memory list for this session.
-  For persistent listing, implement a Tauri command (e.g. `list_recordings`) that reads app_data/recordings.
-*/
-const RecordingStore = (() => {
-  let recs: Recording[] = [];
-  const subs: Array<() => void> = [];
-  return {
-    add: (entry: Partial<Recording>) => {
-      const r: Recording = {
-        id: Math.random().toString(36).slice(2, 9),
-        file: entry.file || "",
-        startedAt: entry.startedAt || new Date().toISOString(),
-        pid: entry.pid,
-        status: entry.status || "done",
-      };
-      recs.unshift(r);
-      subs.forEach((s) => s());
-      return r;
-    },
-    all: () => recs.slice(),
-    subscribe: (cb: () => void) => {
-      subs.push(cb);
-      return () => {
-        const i = subs.indexOf(cb);
-        if (i >= 0) subs.splice(i, 1);
-      };
-    },
-  };
-})();
 
 function RecordingsList() {
-  const [list, setList] = useState<Recording[]>(RecordingStore.all());
+  const [recs, setRecs] = useState<Recording[]>([]);
 
   useEffect(() => {
-    const unsub = RecordingStore.subscribe(() => setList(RecordingStore.all()));
-    return unsub;
+    setRecs(RecordingStore.all());
   }, []);
 
   return (
-    <section className="border rounded p-4 mb-4">
-      <h3 className="font-medium">Recordings (Session)</h3>
-      <p className="text-sm text-gray-600">This list is in-memory for this session. Implement a backend command to list saved files persistently.</p>
-      <ul className="mt-3 space-y-2 max-h-64 overflow-auto">
-        {list.length === 0 && <li className="text-sm text-gray-500">No recordings yet.</li>}
-        {list.map((r) => (
-          <li key={r.id} className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-medium">{r.file.split("/").pop()}</div>
-              <div className="text-xs text-gray-500">{new Date(r.startedAt).toLocaleString()}</div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                className="px-2 py-1 bg-gray-200 rounded text-xs"
-                onClick={() => window.open("file://" + r.file)}
-              >
-                Open
-              </button>
-              <button
-                className="px-2 py-1 bg-blue-600 text-white rounded text-xs"
-                onClick={async () => {
-                  // try to call summarize_meeting; may not be implemented in your backend yet
-                  try {
-                    const res: any = await invoke("summarize_meeting", { filePath: r.file });
-                    alert(String(res));
-                  } catch (e: any) {
-                    alert("Summarize command not available: " + String(e));
-                  }
-                }}
-              >
-                ✨ Summarize
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function SummaryPanel() {
-  const [text, setText] = useState<string | null>(null);
-
-  return (
-    <section className="border rounded p-4">
-      <h3 className="font-medium">Summary</h3>
-      <div className="mt-3 text-sm text-gray-700">
-        {text ? (
-          <div className="whitespace-pre-wrap">{text}</div>
+    <section className="rounded-xl border bg-white p-4 shadow-sm">
+      <h3 className="font-medium text-lg">Recordings</h3>
+      <div className="mt-3 space-y-2 text-sm">
+        {recs.length === 0 ? (
+          <div className="text-gray-400">No recordings yet.</div>
         ) : (
-          <div className="text-gray-500">Click "Summarize" on a recording to get a summary here.</div>
+          recs.map((r) => (
+            <div
+              key={r.id}
+              className="flex items-center justify-between rounded bg-gray-50 p-2"
+            >
+              <span className="truncate">{r.file}</span>
+              <span className="text-xs text-gray-500">{r.status}</span>
+            </div>
+          ))
         )}
       </div>
     </section>
   );
 }
 
+function Header() {
+  return (
+    <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+      <div>
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">
+          🎧 AudioCap — Recorder
+        </h1>
+        <p className="text-sm text-gray-600">
+          Start/stop recordings, save files, and summarize meetings.
+        </p>
+      </div>
+      <div className="text-right text-xs sm:text-sm text-gray-500">v0.1</div>
+    </header>
+  );
+}
+
+export default function App() {
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 p-4 sm:p-6 font-sans">
+      <div className="max-w-6xl mx-auto bg-white rounded-2xl shadow-lg p-4 sm:p-8">
+        <Header />
+        <main className="mt-6 grid gap-6 md:grid-cols-2">
+          {/* Left column */}
+          <div className="flex flex-col gap-6">
+            <RecorderPanel />
+            <DevicePanel />
+            <SettingsPanel />
+          </div>
+
+          {/* Right column */}
+          <div className="flex flex-col gap-6">
+            <RecordingsList />
+            <SummaryPanel />
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
