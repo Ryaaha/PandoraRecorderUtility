@@ -185,39 +185,47 @@ function RecorderPanel() {
       <h2 className="font-semibold text-lg">Recorder</h2>
 
       <div className="mt-4 flex flex-col gap-3">
+        
         <div className="flex flex-wrap items-center gap-3">
-          {!recording ? (
-            <button
-              className={`px-5 py-2 rounded-lg text-white font-medium transition ${
-                isWorking ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"
-              }`}
-              onClick={start}
-              disabled={isWorking}
-            >
-              🎙 Start
-            </button>
-          ) : (
-            <button
-              className={`px-5 py-2 rounded-lg text-white font-medium transition ${
-                isWorking ? "bg-gray-400" : "bg-red-600 hover:bg-red-700"
-              }`}
-              onClick={stop}
-              disabled={isWorking}
-            >
-              ⏹ Stop
-            </button>
-          )}
+  {/* Start button */}
+  <button
+    className={`px-5 py-2 rounded-lg text-white font-medium transition ${
+      isWorking || recording
+        ? "bg-gray-400 cursor-not-allowed"
+        : "bg-green-600 hover:bg-green-700"
+    }`}
+    onClick={start}
+    disabled={isWorking || recording}
+  >
+    🎙 Start
+  </button>
 
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={background}
-              onChange={(e) => setBackground(e.target.checked)}
-              className="w-4 h-4"
-            />
-            <span>Background</span>
-          </label>
-        </div>
+  {/* Small Stop button (always visible when recording) */}
+  {recording && (
+    <button
+      className={`px-3 py-1 rounded-md text-white text-sm font-medium transition ${
+        isWorking
+          ? "bg-gray-400 cursor-not-allowed"
+          : "bg-red-600 hover:bg-red-700"
+      }`}
+      onClick={stop}
+      disabled={isWorking}
+    >
+      ⏹ Stop
+    </button>
+  )}
+
+  <label className="flex items-center gap-2 text-sm">
+    <input
+      type="checkbox"
+      checked={background}
+      onChange={(e) => setBackground(e.target.checked)}
+      className="w-4 h-4"
+    />
+    <span>Background</span>
+  </label>
+</div>
+
 
         <input
           type="text"
