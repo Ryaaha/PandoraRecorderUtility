@@ -1,1 +1,2 @@
-Supersimple Recording + Transcribing + Summarizing util for Pandora (An AI agent im building)
+Audio recording util for another app of mine, or for general purposes, the build doesnt work right now, also, keep the background checkbox checked to stop cleanly.
+The app just uses ffmpeg to listen to mic and audio output. Should work on macos and windows as well
